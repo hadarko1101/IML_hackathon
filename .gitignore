@@ -1,3 +1,5 @@
 train_set/
 augmentations/
 *.zip
+.idea/
+dataset/
