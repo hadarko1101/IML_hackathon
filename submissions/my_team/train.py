@@ -1,3 +1,5 @@
+import argparse
+import csv
 import random
 import sys
 from pathlib import Path
@@ -13,11 +15,12 @@ TEAM_DIR = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from model import ModelArchitecture
+from model import MODEL_REGISTRY, build_model
 from data_processing import get_data_loaders, get_train_transform
 
 
 OUTPUT = TEAM_DIR / "weights.joblib"
+METRICS_OUTPUT = TEAM_DIR / "training_metrics.csv"
 
 IMAGE_SIZE = 224
 BATCH_SIZE = 32
@@ -33,6 +36,7 @@ GRAD_CLIP_NORM = 1.0
 DEV1_SCORE_WEIGHT = 0.55
 DEV2_SCORE_WEIGHT = 0.25
 AUG_SCORE_WEIGHT = 0.20
+
 
 def seed_everything(seed: int) -> None:
     random.seed(seed)
@@ -113,6 +117,7 @@ def evaluate(model, loader, criterion, device, epoch: int, split_name: str):
 
 
 def save_weights(model, output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     state_dict = model.cpu().state_dict()
     joblib.dump(state_dict, output_path)
     print(f"Saved best weights to {output_path}")
@@ -128,6 +133,63 @@ def set_train_augmentation(train_loader, epoch: int) -> str:
     return level
 
 
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--model",
+        choices=sorted(MODEL_REGISTRY),
+        default="balanced_resnet",
+        help="Architecture variant to train.",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=OUTPUT,
+        help="Where to save the best model state_dict.",
+    )
+    parser.add_argument(
+        "--metrics-output",
+        type=Path,
+        default=METRICS_OUTPUT,
+        help="CSV file for per-epoch metrics.",
+    )
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=EPOCHS,
+        help="Number of training epochs.",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=BATCH_SIZE,
+        help="Batch size for all loaders.",
+    )
+    parser.add_argument(
+        "--steps-per-epoch",
+        type=int,
+        default=STEPS_PER_EPOCH,
+        help="Limit train batches per epoch. Omit for full epochs.",
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=0,
+        help="DataLoader workers. Use 0 on Windows if multiprocessing is unstable.",
+    )
+    return parser.parse_args()
+
+
+def append_metrics(metrics_path: Path, row: dict) -> None:
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not metrics_path.exists()
+    with metrics_path.open("a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(row.keys()))
+        if write_header:
+            writer.writeheader()
+        writer.writerow(row)
+
+
 def main():
     """
     Full training pipeline.
@@ -135,19 +197,24 @@ def main():
     This script creates weights.joblib from a deterministic 80/20 split of
     train_set/train.
     """
+    args = parse_args()
     seed_everything(SEED)
 
     print("Loading data using data_processing.py...")
     train_loader, dev1_loader, dev2_loader, test_loader, aug_loader = get_data_loaders(
-        batch_size=BATCH_SIZE,
-        num_workers=0,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
         augmentation_level="standard",
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Training on {device}")
+    print(f"Training model: {args.model}")
+    print(f"Best weights output: {args.output}")
+    print(f"Metrics output: {args.metrics_output}")
 
-    model = ModelArchitecture(num_classes=20).to(device)
+    model = build_model(args.model, num_classes=20).to(device)
+    print(f"Parameter count: {sum(p.numel() for p in model.parameters()):,}")
     criterion = nn.CrossEntropyLoss(label_smoothing=LABEL_SMOOTHING)
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -156,7 +223,7 @@ def main():
     )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer,
-        T_max=EPOCHS,
+        T_max=args.epochs,
     )
 
     best_score = -1.0
@@ -166,15 +233,18 @@ def main():
         f"{DEV2_SCORE_WEIGHT:.2f}*dev2 + "
         f"{AUG_SCORE_WEIGHT:.2f}*aug"
     )
-    if STEPS_PER_EPOCH is None:
+    if args.steps_per_epoch is None:
         print(f"Training uses full epochs: {len(train_loader)} batches per epoch.")
     else:
-        print(f"Training uses {STEPS_PER_EPOCH} batches per epoch.")
+        print(f"Training uses {args.steps_per_epoch} batches per epoch.")
 
-    for epoch in range(1, EPOCHS + 1):
+    global STEPS_PER_EPOCH
+    STEPS_PER_EPOCH = args.steps_per_epoch
+
+    for epoch in range(1, args.epochs + 1):
         augmentation_level = set_train_augmentation(train_loader, epoch)
         print(
-            f"\nStarting epoch {epoch:02d}/{EPOCHS} "
+            f"\nStarting epoch {epoch:02d}/{args.epochs} "
             f"with {augmentation_level} augmentation",
             flush=True,
         )
@@ -217,7 +287,7 @@ def main():
         )
 
         print(
-            f"Epoch {epoch:02d}/{EPOCHS} "
+            f"Epoch {epoch:02d}/{args.epochs} "
             f"lr={scheduler.get_last_lr()[0]:.6f} "
             f"train_loss={train_loss:.4f} "
             f"train_acc={train_accuracy:.4f} "
@@ -230,11 +300,31 @@ def main():
             f"score={checkpoint_score:.4f}"
         )
 
+        append_metrics(
+            args.metrics_output,
+            {
+                "model": args.model,
+                "epoch": epoch,
+                "augmentation": augmentation_level,
+                "lr": scheduler.get_last_lr()[0],
+                "train_loss": train_loss,
+                "train_acc": train_accuracy,
+                "dev1_loss": dev1_loss,
+                "dev1_acc": dev1_accuracy,
+                "dev2_loss": dev2_loss,
+                "dev2_acc": dev2_accuracy,
+                "aug_loss": aug_loss,
+                "aug_acc": aug_accuracy,
+                "score": checkpoint_score,
+                "best_score_so_far": max(best_score, checkpoint_score),
+            },
+        )
+
         scheduler.step()
 
         if checkpoint_score > best_score:
             best_score = checkpoint_score
-            save_weights(model, OUTPUT)
+            save_weights(model, args.output)
             model.to(device)
 
     test_loss, test_accuracy = evaluate(
@@ -242,7 +332,7 @@ def main():
         test_loader,
         criterion,
         device,
-        EPOCHS,
+        args.epochs,
         "test",
     )
     print(f"Best checkpoint score: {best_score:.4f}")

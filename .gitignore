@@ -4,6 +4,8 @@ augmentations/
 .idea/
 dataset/
 submissions/my_team/weights.joblib
+submissions/my_team/weights_*.joblib
+submissions/my_team/overnight_logs/
 __pycache__/
 **/__pycache__/
 *.py[cod]
