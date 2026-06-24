@@ -7,3 +7,4 @@ submissions/my_team/weights.joblib
 __pycache__/
 **/__pycache__/
 *.py[cod]
+.venv/
