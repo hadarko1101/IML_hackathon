@@ -297,3 +297,86 @@ def preprocess_batch(images: list, target_size: int = TARGET_SIZE) -> torch.Tens
     batch = normalize(batch)
 
     return batch
+
+
+# ---------------------------------------------------------------------------
+# Tensor → PIL Image (for visual inspection)
+# ---------------------------------------------------------------------------
+
+def tensor_to_images(batch: torch.Tensor) -> list:
+    """
+    Convert a batch tensor back to a list of PIL Images for visual inspection.
+
+    Handles both normalized and unnormalized tensors:
+      - If values are outside [0, 1] (i.e. normalized), rescales each image
+        to [0, 255] using min-max scaling.
+      - If values are in [0, 1], simply scales to [0, 255].
+
+    Args:
+        batch: Tensor of shape (N, C, H, W) or (C, H, W) for a single image.
+
+    Returns:
+        List of PIL.Image objects in RGB mode.
+    """
+    # Handle single image (C, H, W) → add batch dimension
+    if batch.dim() == 3:
+        batch = batch.unsqueeze(0)
+
+    images = []
+    for i in range(batch.shape[0]):
+        img_tensor = batch[i].detach().cpu().float()  # (C, H, W)
+
+        # Undo normalization via min-max rescale to [0, 1]
+        for c in range(img_tensor.shape[0]):
+            c_min = img_tensor[c].min()
+            c_max = img_tensor[c].max()
+            if c_max - c_min > 1e-8:
+                img_tensor[c] = (img_tensor[c] - c_min) / (c_max - c_min)
+            else:
+                img_tensor[c] = torch.zeros_like(img_tensor[c])
+
+        # (C, H, W) → (H, W, C) → numpy → uint8
+        arr = img_tensor.permute(1, 2, 0).numpy()
+        arr = (arr * 255).clip(0, 255).astype(np.uint8)
+        images.append(Image.fromarray(arr, mode="RGB"))
+
+    return images
+
+
+def save_debug_grid(
+    batch: torch.Tensor,
+    path: str = "debug_grid.png",
+    max_images: int = 16,
+    cols: int = 4,
+    labels: list = None,
+) -> None:
+    """
+    Save a grid of images from a batch tensor to disk for quick visual inspection.
+
+    Args:
+        batch:      Tensor of shape (N, C, H, W).
+        path:       Output file path (e.g. 'debug_grid.png').
+        max_images: Maximum number of images to include in the grid.
+        cols:       Number of columns in the grid.
+        labels:     Optional list of label strings/ints for each image.
+    """
+    images = tensor_to_images(batch[:max_images])
+    n = len(images)
+    rows = (n + cols - 1) // cols
+
+    w, h = images[0].size
+    padding = 4
+    cell_w = w + padding
+    cell_h = h + padding + (20 if labels else 0)
+
+    grid = Image.new("RGB", (cols * cell_w + padding, rows * cell_h + padding), (40, 40, 40))
+
+    for idx, img in enumerate(images):
+        r = idx // cols
+        c = idx % cols
+        x = c * cell_w + padding
+        y = r * cell_h + padding
+        grid.paste(img, (x, y))
+
+    grid.save(path)
+    print(f"Saved debug grid ({n} images, {rows}x{cols}) -> {path}")
