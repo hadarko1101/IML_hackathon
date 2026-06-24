@@ -1,6 +1,7 @@
 import random
 import sys
 from pathlib import Path
+from typing import Optional
 
 import joblib
 import torch
@@ -18,14 +19,16 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from labels import HF_INDEX_TO_IDX, HF_INDEX_TO_NAME, TARGET_HF_INDICES
 from model import ModelArchitecture
+from data_processing import get_data_loaders
 
 
-DATA_ROOT = PROJECT_ROOT / "train_set" / "train"
+DATA_ROOT = PROJECT_ROOT / "dataset" / "train_set" / "train"
 OUTPUT = TEAM_DIR / "weights.joblib"
 
 IMAGE_SIZE = 224
 BATCH_SIZE = 32
-EPOCHS = 15
+EPOCHS = 10
+STEPS_PER_EPOCH = 50
 SEED = 42
 LEARNING_RATE = 3e-4
 WEIGHT_DECAY = 1e-4
@@ -39,120 +42,23 @@ IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 
-
-class ImagePathDataset(Dataset):
-    def __init__(self, samples, transform=None):
-        self.samples = samples
-        self.transform = transform
-
-    def __len__(self):
-        return len(self.samples)
-
-    def __getitem__(self, idx):
-        path, label = self.samples[idx]
-        image = Image.open(path).convert("RGB")
-
-        if self.transform is not None:
-            image = self.transform(image)
-
-        return image, label
-
-
 def seed_everything(seed: int) -> None:
     random.seed(seed)
     torch.manual_seed(seed)
 
-
-def list_class_images(class_dir: Path):
-    return sorted(
-        path
-        for path in class_dir.iterdir()
-        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
-    )
-
-
-def build_train_validation_split(
-    root: Path,
-    seed: int = SEED,
-    max_images_per_class: int | None = MAX_IMAGES_PER_CLASS,
-):
-    if not root.exists():
-        raise FileNotFoundError(f"Training folder not found: {root}")
-
-    rng = random.Random(seed)
-    train_samples = []
-    validation_samples = []
-
-    for hf_idx in sorted(TARGET_HF_INDICES):
-        class_name = HF_INDEX_TO_NAME[hf_idx]
-        class_dir = root / class_name
-
-        if not class_dir.exists():
-            raise FileNotFoundError(f"Class folder not found: {class_dir}")
-
-        image_paths = list_class_images(class_dir)
-        if not image_paths:
-            raise RuntimeError(f"No images found in class folder: {class_dir}")
-
-        shuffled_paths = image_paths[:]
-        rng.shuffle(shuffled_paths)
-
-        if max_images_per_class is not None:
-            shuffled_paths = shuffled_paths[:max_images_per_class]
-
-        train_count = int(len(shuffled_paths) * (1.0 - VALIDATION_FRACTION))
-        local_idx = HF_INDEX_TO_IDX[hf_idx]
-
-        train_samples.extend((path, local_idx) for path in shuffled_paths[:train_count])
-        validation_samples.extend((path, local_idx) for path in shuffled_paths[train_count:])
-
-        print(
-            f"{class_name:<16} train={train_count:<4} "
-            f"validation={len(shuffled_paths) - train_count:<4}"
-        )
-
-    rng.shuffle(train_samples)
-    rng.shuffle(validation_samples)
-
-    return train_samples, validation_samples
-
-
-def create_transforms():
-    train_transform = transforms.Compose(
-        [
-            transforms.Resize(256),
-            transforms.RandomResizedCrop(IMAGE_SIZE),
-            transforms.RandomHorizontalFlip(),
-            transforms.ColorJitter(
-                brightness=0.15,
-                contrast=0.15,
-                saturation=0.15,
-                hue=0.03,
-            ),
-            transforms.ToTensor(),
-            transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD),
-        ]
-    )
-
-    validation_transform = transforms.Compose(
-        [
-            transforms.Resize(256),
-            transforms.CenterCrop(IMAGE_SIZE),
-            transforms.ToTensor(),
-            transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD),
-        ]
-    )
-
-    return train_transform, validation_transform
-
-
-def run_epoch(model, loader, criterion, optimizer, device, epoch: int):
+def run_epoch(model, loader, data_iter, criterion, optimizer, device, epoch: int, steps: int):
     model.train()
     total_loss = 0.0
     correct = 0
     total = 0
 
-    for batch_idx, (images, labels) in enumerate(loader, start=1):
+    for batch_idx in range(1, steps + 1):
+        try:
+            images, labels = next(data_iter)
+        except StopIteration:
+            data_iter = iter(loader)
+            images, labels = next(data_iter)
+
         images = images.to(device)
         labels = labels.to(device)
 
@@ -168,16 +74,16 @@ def run_epoch(model, loader, criterion, optimizer, device, epoch: int):
         correct += (logits.argmax(dim=1) == labels).sum().item()
         total += batch_size
 
-        if batch_idx == 1 or batch_idx % LOG_EVERY_BATCHES == 0 or batch_idx == len(loader):
+        if batch_idx == 1 or batch_idx % LOG_EVERY_BATCHES == 0 or batch_idx == steps:
             print(
                 f"  epoch {epoch:02d} train "
-                f"batch {batch_idx:03d}/{len(loader):03d} "
+                f"batch {batch_idx:03d}/{steps:03d} "
                 f"loss={total_loss / total:.4f} "
                 f"acc={correct / total:.4f}",
                 flush=True,
             )
 
-    return total_loss / total, correct / total
+    return total_loss / total, correct / total, data_iter
 
 
 @torch.no_grad()
@@ -226,37 +132,14 @@ def main():
     """
     seed_everything(SEED)
 
-    print(f"Loading images from {DATA_ROOT}")
-    if MAX_IMAGES_PER_CLASS is None:
-        print("Using all images per class.")
-    else:
-        print(f"Using at most {MAX_IMAGES_PER_CLASS} images per class for this run.")
-
-    train_samples, validation_samples = build_train_validation_split(DATA_ROOT)
-    print(
-        f"\nTotal split: train={len(train_samples)} "
-        f"validation={len(validation_samples)}"
-    )
-
-    train_transform, validation_transform = create_transforms()
-    train_dataset = ImagePathDataset(train_samples, transform=train_transform)
-    validation_dataset = ImagePathDataset(
-        validation_samples,
-        transform=validation_transform,
-    )
-
-    train_loader = DataLoader(
-        train_dataset,
+    print("Loading data using data_processing.py...")
+    train_loader, dev1_loader, dev2_loader, test_loader, aug_loader = get_data_loaders(
         batch_size=BATCH_SIZE,
-        shuffle=True,
         num_workers=0,
+        augmentation_level="aggressive"
     )
-    validation_loader = DataLoader(
-        validation_dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=False,
-        num_workers=0,
-    )
+    
+    validation_loader = dev1_loader
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Training on {device}")
@@ -274,16 +157,19 @@ def main():
     )
 
     best_validation_accuracy = -1.0
+    train_iter = iter(train_loader)
 
     for epoch in range(1, EPOCHS + 1):
         print(f"\nStarting epoch {epoch:02d}/{EPOCHS}", flush=True)
-        train_loss, train_accuracy = run_epoch(
+        train_loss, train_accuracy, train_iter = run_epoch(
             model,
             train_loader,
+            train_iter,
             criterion,
             optimizer,
             device,
             epoch,
+            STEPS_PER_EPOCH
         )
         validation_loss, validation_accuracy = evaluate(
             model,
