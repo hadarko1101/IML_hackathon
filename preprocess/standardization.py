@@ -1,4 +1,4 @@
-from PIL import Image
+from PIL import Image, ImageOps
 from dataclasses import dataclass, field
 import torch
 import numpy as np
@@ -106,6 +106,68 @@ def _check_image(img) -> str:
         return f"Pixel data unreadable: {exc}"
 
     return ""  # no corruption found
+
+
+# ---------------------------------------------------------------------------
+# EXIF Orientation Fix
+# ---------------------------------------------------------------------------
+
+def fix_orientation(images: list) -> list:
+    """
+    Apply EXIF orientation tags so pixel data matches visual orientation.
+
+    Phone cameras often store photos in a fixed pixel orientation and record
+    the actual rotation in EXIF metadata.  PIL does NOT auto-rotate, so
+    without this fix the model would see sideways / upside-down images.
+
+    Args:
+        images: List of PIL.Image objects.
+
+    Returns:
+        List of PIL.Image objects with correct pixel orientation.
+    """
+    fixed = []
+    for img in images:
+        try:
+            img = ImageOps.exif_transpose(img)
+        except Exception:
+            pass  # no EXIF data or unsupported tag — keep image as-is
+        fixed.append(img)
+    return fixed
+
+
+# ---------------------------------------------------------------------------
+# Color Space Conversion
+# ---------------------------------------------------------------------------
+
+def convert_to_rgb(images: list) -> list:
+    """
+    Convert every image to the RGB color space.
+
+    Handles:
+      - RGBA  → composites alpha over a white background, then converts.
+      - L / P → converts directly to RGB.
+      - CMYK / YCbCr / LAB / etc. → converts directly to RGB.
+      - RGB   → returned unchanged.
+
+    Args:
+        images: List of PIL.Image objects (any mode).
+
+    Returns:
+        List of PIL.Image objects, all in mode 'RGB'.
+    """
+    converted = []
+    for img in images:
+        if img.mode == "RGB":
+            converted.append(img)
+        elif img.mode == "RGBA":
+            # Composite over white to avoid black artifacts from alpha
+            background = Image.new("RGB", img.size, (255, 255, 255))
+            background.paste(img, mask=img.split()[3])  # 3 = alpha channel
+            converted.append(background)
+        else:
+            converted.append(img.convert("RGB"))
+    return converted
 
 
 # ---------------------------------------------------------------------------
@@ -219,13 +281,19 @@ def preprocess_batch(images: list, target_size: int = TARGET_SIZE) -> torch.Tens
     if result.num_corrupted > 0:
         print(result.summary())
 
-    # Step 2 — Resize valid images
-    resized = short_edge_resize_and_crop(result.valid_images, target_size)
+    # Step 2 — Fix EXIF orientation
+    oriented = fix_orientation(result.valid_images)
 
-    # Step 3 — Convert to float32 tensors (values in [0, 1])
+    # Step 3 — Convert all images to RGB
+    rgb_images = convert_to_rgb(oriented)
+
+    # Step 4 — Resize to target_size x target_size
+    resized = short_edge_resize_and_crop(rgb_images, target_size)
+
+    # Step 5 — Convert to float32 tensors (values in [0, 1])
     batch = to_tensors(resized)
 
-    # Step 4 — Normalize (batch mean/std)
+    # Step 6 — Normalize (batch mean/std)
     batch = normalize(batch)
 
     return batch
