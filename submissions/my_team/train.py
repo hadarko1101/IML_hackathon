@@ -32,6 +32,8 @@ WEIGHT_DECAY = 1e-4
 VALIDATION_FRACTION = 0.2
 MAX_IMAGES_PER_CLASS = 50
 LOG_EVERY_BATCHES = 10
+LABEL_SMOOTHING = 0.05
+GRAD_CLIP_NORM = 1.0
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
@@ -158,6 +160,7 @@ def run_epoch(model, loader, criterion, optimizer, device, epoch: int):
         logits = model(images)
         loss = criterion(logits, labels)
         loss.backward()
+        nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP_NORM)
         optimizer.step()
 
         batch_size = labels.size(0)
@@ -259,11 +262,15 @@ def main():
     print(f"Training on {device}")
 
     model = ModelArchitecture(num_classes=20).to(device)
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(label_smoothing=LABEL_SMOOTHING)
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=LEARNING_RATE,
         weight_decay=WEIGHT_DECAY,
+    )
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=EPOCHS,
     )
 
     best_validation_accuracy = -1.0
@@ -288,11 +295,14 @@ def main():
 
         print(
             f"Epoch {epoch:02d}/{EPOCHS} "
+            f"lr={scheduler.get_last_lr()[0]:.6f} "
             f"train_loss={train_loss:.4f} "
             f"train_acc={train_accuracy:.4f} "
             f"val_loss={validation_loss:.4f} "
             f"val_acc={validation_accuracy:.4f}"
         )
+
+        scheduler.step()
 
         if validation_accuracy > best_validation_accuracy:
             best_validation_accuracy = validation_accuracy
