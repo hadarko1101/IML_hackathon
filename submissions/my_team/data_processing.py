@@ -36,10 +36,26 @@ from standardization import (
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 
-# Paths relative to submissions/my_team/
-DATA_ROOT = Path(__file__).resolve().parent.parent.parent / "dataset"
-TRAIN_DIR = DATA_ROOT / "train_set" / "train"
-AUG_DIR = DATA_ROOT / "augmentations" / "augmentations"
+# Paths relative to the project root.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+DATA_ROOT = PROJECT_ROOT / "dataset"
+
+
+def _first_existing_path(candidates: List[Path]) -> Path:
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+TRAIN_DIR = _first_existing_path([
+    PROJECT_ROOT / "train_set" / "train",
+    DATA_ROOT / "train_set" / "train",
+])
+AUG_DIR = _first_existing_path([
+    DATA_ROOT / "augmentations" / "augmentations",
+    PROJECT_ROOT / "augmentations" / "augmentations",
+])
 
 SPLIT_SEED = 42
 
