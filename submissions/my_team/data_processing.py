@@ -61,9 +61,9 @@ SPLIT_SEED = 42
 
 # Split ratios — must sum to 1.0
 SPLIT_RATIOS = {
-    "train": 0.80,
+    "train": 0.85,
     "dev1":  0.10,
-    "dev2":  0.05,
+    "dev2":  0.00,
     "test":  0.05,
 }
 
