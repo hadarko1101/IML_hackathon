@@ -1,0 +1,141 @@
+Hadar Koren,Itamar Rappoport,Yair Peleg,Adi Kizel
+216372185,328243191,215981465,328097001
+
+Here we will overview the work process we went through as
+we designed the model and trained it.
+In order, we will explain our model, focusing on major design choices,
+then the data preprocessing pipeline.
+
+---------------- |1| The model --------------------
+
+# 1.1 Major Design Choices
+
+The CNN is built from scratch and follows a structured pipeline from raw pixels to final class predictions:
+
+
+1. The 4 Feature Stages & Residual Blocks
+The core of the network consists of 4 sequential stages. Each stage contains multiple Residual Blocks (2 blocks per stage). 
+* Inside a Block:** Each block processes data through two 3x3 convolutions, with Batch Normalization (to stabilize training) and a ReLU activation between them.
+* The Shortcut Connection:** To prevent the vanishing gradient problem, a "shortcut" path allows the input to bypass the two convolutions and be directly added to the block's output. 
+
+2. Downsampling & Channel Expansion**
+As data moves from one stage to the next, it trades spatial resolution for feature complexity. The very first convolution of stages 2, 3, and 4 uses a `stride=2`. This halves the image size (e.g., 112x112 down to 56x56) while doubling the number of channels (e.g., 64 to 128) to learn more abstract concepts. A 1x1 shortcut connection is used here to ensure the skipped data matches the new dimensions.
+
+3. Global Average Pooling
+After the 4th stage, the spatial grid (e.g., 28x28) is condensed into a 1x1 pixel per channel using Adaptive Average Pooling. This drastically reduces the number of parameters compared to flattening the whole grid and makes the network capable of handling arbitrary input resolutions.
+
+4. The Classifier 
+The pooled tensor is flattened and passed through a Dropout layer (to prevent overfitting) before entering a final fully connected Linear layer that outputs the raw scores for the 20 classes.
+
+Training Stability
+* Custom Initialization: Kaiming Normal initialization is used for convolutional layers, which is optimal for ReLU activations.
+* Gradient Clipping: Prevents exploding gradients by clipping their norm during backpropagation.
+
+# 1.2 Model Variants
+Three main variants are defined:
+
+BalancedResNet: 4 stages, doubling channels (32, 64, 128, 256), with 2 blocks per stage.
+WideResNet: Increases channel capacity (48, 96, 192, 384) for learning more varied feature representations.
+DeepResNet: Increases depth to 3 blocks per stage to learn more complex, hierarchical features.
+
+The current default submission architecture is WideResNet.
+
+# 1.3 Architectures and Runs We Tried
+
+baseline model:
+a very simplified CNN with one convolution layer and a classifier head.  
+when training on 14000 samples for roughly 15 minutes. we got 0.4 accuracy
+we then proceeded to train on the same parameters but with all our augmentations.
+we saw an immediate reduction to 0.3 accuracy. and a general reduction of 30-50%
+in accuracy between standard data and augmented data.
+we also noticed a significant increase of needed runtime.
+to achieve results higher than 50% we started running 1 hour long training
+at least. 
+because of this we transitioned to running on a google collab pc.
+
+then we decided to work on the full CNN architecture that is described above.
+bringing us to the more relevant runs:
+
+WideResNet fast run:
+This was a faster WideResNet experiment using lower image resolution and fewer
+training steps per epoch. It reached about 0.77 accuracy on the test set. Since
+the lower resolution can remove useful image details, we later moved the wide
+model to the full evaluator-matching resolution.
+
+Stats:
+model: wide_resnet
+epochs: 25
+batch-size: 64
+steps-per-epoch: 125
+robust-eval-every: 3
+IMAGE_SIZE = 160 (instead of 224)
+RESIZE_SIZE = 190
+
+BalancedResNet run:
+This was our balanced-capacity model. It used the same residual structure, but
+with fewer channels than the wide model.
+
+Stats:
+BATCH_SIZE = 64
+EPOCHS = 25
+STEPS_PER_EPOCH = 200
+STANDARD_AUG_EPOCHS = 5
+LEARNING_RATE = 3e-4
+MIN_LEARNING_RATE = 3e-5
+IMAGE_SIZE = 224
+RESIZE_SIZE = 256
+
+WideResNet run:
+The current code is configured to use WideResNet as the default submission
+architecture. This keeps the higher-capacity model while matching the evaluator
+image preprocessing:
+
+Stats:
+IMAGE_SIZE = 224
+RESIZE_SIZE = 256
+BATCH_SIZE = 64
+EPOCHS = 25
+STEPS_PER_EPOCH = 200
+STANDARD_AUG_EPOCHS = 5
+LEARNING_RATE = 3e-4
+MIN_LEARNING_RATE = 3e-5
+
+final WideResNet run:
+we ran this model variation again with an incresed epoch value of 35, after
+seeing promising results from the previous run. we expected to see satisfactory results
+in a reasonable training time.
+the training achieved 0.855 accuracy
+
+Stats:
+IMAGE_SIZE = 224
+RESIZE_SIZE = 256
+BATCH_SIZE = 64
+EPOCHS = 35
+STEPS_PER_EPOCH = 200
+STANDARD_AUG_EPOCHS = 5
+LEARNING_RATE = 3e-4
+MIN_LEARNING_RATE = 3e-5
+
+---------------- |2| data preprocessing and augmentations ----------------
+
+# Data Splits
+The dataset is split in a stratified way into train (88.5%), dev1 (10%),
+dev2 (0.5%), and held-out test (1%). In addition, the provided augmented images
+are loaded as a separate robustness evaluation set.
+
+# Augmentation Strategies
+The pipeline implements multiple augmentation tiers: standard, aggressive, and
+extreme, each more altering than the previous. In the current training script,
+the model starts with standard augmentation for the first 5 epochs and then
+switches to aggressive augmentation. The idea was to increase difficulty
+gradually and improve robustness.
+
+The following augmentations were implemented:
+
+- Resize, random cropping and horizontal flip.
+- Color jitter with brightness, contrast, saturation, and hue changes.
+- Random erasing, which removes square regions from the image.
+- GaussianNoise: Simulates sensor noise.
+- ChannelShuffle: Prevents the model from over-relying on specific color channels.
+- PatchShuffle: Disrupts spatial coherence, forcing the model to learn local textures.
+

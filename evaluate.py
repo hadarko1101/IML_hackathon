@@ -31,8 +31,13 @@ from labels import (
 )
 
 # ── editable ──────────────────────────────────────────────────────────────────
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
 DATA_ROOT = Path("dataset")   # contains train/ and validation/
 SUBMISSIONS_DIR = Path("submissions")
+TEAM_NAME = "challenge2_216372185_328243191_215981465_328097001"
 BATCH_SIZE = 64
 WEIGHTS_FILENAME = "weights.joblib"
 # ──────────────────────────────────────────────────────────────────────────────
@@ -83,7 +88,7 @@ class ImageNetSubset(Dataset):
         return image, label
 
 
-def load_test_set():
+def load_validation_set():
     transform = transforms.Compose([
         transforms.Resize(256),
         transforms.CenterCrop(224),
@@ -95,6 +100,35 @@ def load_test_set():
     print(f"Loaded {len(dataset)} validation images across {len(TARGET_HF_INDICES)} classes.\n")
 
     return DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False)
+
+
+def load_team_test_set(team_name: str = TEAM_NAME):
+    team_dir = SUBMISSIONS_DIR / team_name
+    if not (team_dir / "data_processing.py").exists():
+        raise FileNotFoundError(f"Missing data_processing.py in {team_dir}")
+
+    sys.path.insert(0, str(team_dir))
+    sys.modules.pop("data_processing", None)
+    sys.modules.pop("standardization", None)
+    try:
+        import data_processing
+
+        _, _, _, test_loader, _ = data_processing.get_data_loaders(
+            batch_size=BATCH_SIZE,
+            num_workers=0,
+            augmentation_level="standard",
+        )
+    finally:
+        sys.path.pop(0)
+        sys.modules.pop("data_processing", None)
+        sys.modules.pop("standardization", None)
+
+    print(f"Loaded {len(test_loader.dataset)} images from {team_name}'s local test split.\n")
+    return test_loader
+
+
+def load_test_set():
+    return load_team_test_set(TEAM_NAME)
 
 
 # ── submission loading ────────────────────────────────────────────────────────
@@ -169,6 +203,10 @@ def main():
 
     results = []
     for team_dir in team_dirs:
+
+        if team_dir.name != TEAM_NAME:
+            print(f"Skipping {team_dir.name} (not {TEAM_NAME})")
+            continue
         print(f"Evaluating {team_dir.name}...", end=" ", flush=True)
         try:
             model = load_submission(team_dir)
