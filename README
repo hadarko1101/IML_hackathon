@@ -9,13 +9,27 @@ then the data preprocessing pipeline.
 ---------------- |1| The model --------------------
 
 # 1.1 Major Design Choices
-Residual Blocks: The network utilizes standard residual blocks with two 3x3 convolutions, Batch Normalization, and ReLU activations. A 1x1 shortcut connection is used whenever spatial dimensions or channel counts change.
 
-Global Average Pooling: The network uses Adaptive Average Pooling to reduce the spatial dimensions to 1x1 per channel before the final classifier. This reduces parameters and allows the model to handle different input resolutions.
+The CNN is built from scratch and follows a structured pipeline from raw pixels to final class predictions:
 
-Custom Initialization: The model uses Kaiming Normal initialization for convolutional layers, which is suitable for ReLU activations and helps prevent vanishing/exploding gradients early in training.
 
-Gradient Clipping: Prevents exploding gradients by clipping the norm of the gradients during backpropagation.
+**1. The 4 Feature Stages & Residual Blocks**
+The core of the network consists of 4 sequential stages. Each stage contains multiple **Residual Blocks** (e.g., 2 blocks per stage). 
+* **Inside a Block:** Each block processes data through two 3x3 convolutions, with Batch Normalization (to stabilize training) and a ReLU activation between them.
+* **The Shortcut Connection:** To prevent the vanishing gradient problem, a "shortcut" path allows the input to bypass the two convolutions and be directly added to the block's output. 
+
+**2. Downsampling & Channel Expansion**
+As data moves from one stage to the next, it trades spatial resolution for feature complexity. The very first convolution of stages 2, 3, and 4 uses a `stride=2`. This halves the image size (e.g., 112x112 down to 56x56) while doubling the number of channels (e.g., 64 to 128) to learn more abstract concepts. A 1x1 shortcut connection is used here to ensure the skipped data matches the new dimensions.
+
+**3. Global Average Pooling**
+After the 4th stage, the spatial grid (e.g., 28x28) is condensed into a 1x1 pixel per channel using Adaptive Average Pooling. This drastically reduces the number of parameters compared to flattening the whole grid and makes the network capable of handling arbitrary input resolutions.
+
+**4. The Classifier (FNN)**
+The pooled tensor is flattened and passed through a Dropout layer (to prevent overfitting) before entering a final fully connected Linear layer that outputs the raw scores for the 20 classes.
+
+**. Training Stability**
+* **Custom Initialization:** Kaiming Normal initialization is used for convolutional layers, which is optimal for ReLU activations.
+* **Gradient Clipping:** Prevents exploding gradients by clipping their norm during backpropagation.
 
 # 1.2 Model Variants
 Three main variants are defined:
@@ -57,7 +71,7 @@ MIN_LEARNING_RATE = 3e-5
 IMAGE_SIZE = 224
 RESIZE_SIZE = 256
 
-Final WideResNet run:
+WideResNet run:
 The current code is configured to use WideResNet as the default submission
 architecture. This keeps the higher-capacity model while matching the evaluator
 image preprocessing:
@@ -72,6 +86,20 @@ STANDARD_AUG_EPOCHS = 5
 LEARNING_RATE = 3e-4
 MIN_LEARNING_RATE = 3e-5
 
+final WideResNet run:
+we ran this model variation again with an incresed epoch value of 35, after
+seeing promising results from the previous run. we expected to see satisfactory results
+in a reasonable training time.
+
+Stats:
+IMAGE_SIZE = 224
+RESIZE_SIZE = 256
+BATCH_SIZE = 64
+EPOCHS = 35
+STEPS_PER_EPOCH = 200
+STANDARD_AUG_EPOCHS = 5
+LEARNING_RATE = 3e-4
+MIN_LEARNING_RATE = 3e-5
 
 ---------------- |2| data preprocessing and augmentations ----------------
 
