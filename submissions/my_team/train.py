@@ -39,6 +39,7 @@ DEV1_SCORE_WEIGHT = 0.55
 DEV2_SCORE_WEIGHT = 0.25
 AUG_SCORE_WEIGHT = 0.20
 ROBUST_EVAL_EVERY = 2
+CHECKPOINT_EVERY_EPOCHS = 5
 
 
 def seed_everything(seed: int) -> None:
@@ -129,9 +130,21 @@ def evaluate(model, loader, criterion, device, epoch: int, split_name: str, use_
     return total_loss / total, correct / total
 
 
+def to_cpu(value):
+    if torch.is_tensor(value):
+        return value.detach().cpu()
+    if isinstance(value, dict):
+        return {key: to_cpu(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [to_cpu(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(to_cpu(item) for item in value)
+    return value
+
+
 def save_weights(model, output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    state_dict = model.cpu().state_dict()
+    state_dict = to_cpu(model.state_dict())
     joblib.dump(state_dict, output_path)
     print(f"Saved best weights to {output_path}")
 
@@ -151,10 +164,10 @@ def save_training_checkpoint(
     checkpoint = {
         "epoch": epoch,
         "model_name": args.model,
-        "model_state_dict": model.cpu().state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
-        "scheduler_state_dict": scheduler.state_dict(),
-        "scaler_state_dict": scaler.state_dict(),
+        "model_state_dict": to_cpu(model.state_dict()),
+        "optimizer_state_dict": to_cpu(optimizer.state_dict()),
+        "scheduler_state_dict": to_cpu(scheduler.state_dict()),
+        "scaler_state_dict": to_cpu(scaler.state_dict()),
         "best_score": best_score,
         "best_weights_path": str(best_weights_path),
         "args": vars(args),
@@ -172,7 +185,7 @@ def save_training_checkpoint(
         "rng_state": {
             "python": random.getstate(),
             "torch": torch.get_rng_state(),
-            "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+            "cuda": to_cpu(torch.cuda.get_rng_state_all()) if torch.cuda.is_available() else None,
         },
     }
     joblib.dump(checkpoint, checkpoint_path)
@@ -214,6 +227,12 @@ def parse_args():
         type=Path,
         default=CHECKPOINT_OUTPUT,
         help="Where to save a full checkpoint for continuing training.",
+    )
+    parser.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=CHECKPOINT_EVERY_EPOCHS,
+        help="Save a full training checkpoint every N epochs. Use 0 to save only at the end.",
     )
     parser.add_argument(
         "--epochs",
@@ -290,6 +309,7 @@ def main():
     print(f"Best weights output: {args.output}")
     print(f"Metrics output: {args.metrics_output}")
     print(f"Training checkpoint output: {args.checkpoint_output}")
+    print(f"Training checkpoint cadence: every {args.checkpoint_every} epoch(s)")
 
     model = build_model(args.model, num_classes=20).to(device)
     print(f"Parameter count: {sum(p.numel() for p in model.parameters()):,}")
@@ -432,7 +452,23 @@ def main():
         if checkpoint_score > best_score:
             best_score = checkpoint_score
             save_weights(model, args.output)
-            model.to(device)
+
+        should_save_checkpoint = (
+            args.checkpoint_every > 0
+            and (epoch % args.checkpoint_every == 0 or epoch == args.epochs)
+        )
+        if should_save_checkpoint:
+            save_training_checkpoint(
+                args.checkpoint_output,
+                model,
+                optimizer,
+                scheduler,
+                scaler,
+                args,
+                epoch,
+                best_score,
+                args.output,
+            )
 
     test_loss, test_accuracy = evaluate(
         model,
@@ -445,18 +481,18 @@ def main():
     )
     print(f"Best checkpoint score: {best_score:.4f}")
     print(f"Held-out test: loss={test_loss:.4f} acc={test_accuracy:.4f}")
-    save_training_checkpoint(
-        args.checkpoint_output,
-        model,
-        optimizer,
-        scheduler,
-        scaler,
-        args,
-        args.epochs,
-        best_score,
-        args.output,
-    )
-    model.to(device)
+    if args.checkpoint_every == 0:
+        save_training_checkpoint(
+            args.checkpoint_output,
+            model,
+            optimizer,
+            scheduler,
+            scaler,
+            args,
+            args.epochs,
+            best_score,
+            args.output,
+        )
     elapsed_minutes = (time.perf_counter() - start_time) / 60
     print(f"Total running time: {elapsed_minutes:.2f} minutes")
 

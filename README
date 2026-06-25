@@ -57,7 +57,7 @@ MIN_LEARNING_RATE = 3e-5
 IMAGE_SIZE = 224
 RESIZE_SIZE = 256
 
-Final WideResNet run:
+WideResNet run:
 The current code is configured to use WideResNet as the default submission
 architecture. This keeps the higher-capacity model while matching the evaluator
 image preprocessing:
