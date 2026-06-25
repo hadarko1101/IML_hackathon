@@ -2,6 +2,7 @@ import argparse
 import csv
 import random
 import sys
+import time
 from pathlib import Path
 
 import joblib
@@ -21,11 +22,12 @@ from data_processing import IMAGE_SIZE, RESIZE_SIZE, get_data_loaders, get_train
 
 OUTPUT = TEAM_DIR / "weights.joblib"
 METRICS_OUTPUT = TEAM_DIR / "training_metrics_wide_224.csv"
+CHECKPOINT_OUTPUT = TEAM_DIR / "training_checkpoint.joblib"
 
 BATCH_SIZE = 64
-EPOCHS = 25
+EPOCHS = 35
 STEPS_PER_EPOCH = 200
-STANDARD_AUG_EPOCHS = 5
+STANDARD_AUG_EPOCHS = 7
 SEED = 42
 LEARNING_RATE = 3e-4
 MIN_LEARNING_RATE = 3e-5
@@ -134,6 +136,49 @@ def save_weights(model, output_path: Path) -> None:
     print(f"Saved best weights to {output_path}")
 
 
+def save_training_checkpoint(
+    checkpoint_path: Path,
+    model,
+    optimizer,
+    scheduler,
+    scaler,
+    args,
+    epoch: int,
+    best_score: float,
+    best_weights_path: Path,
+) -> None:
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint = {
+        "epoch": epoch,
+        "model_name": args.model,
+        "model_state_dict": model.cpu().state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "scheduler_state_dict": scheduler.state_dict(),
+        "scaler_state_dict": scaler.state_dict(),
+        "best_score": best_score,
+        "best_weights_path": str(best_weights_path),
+        "args": vars(args),
+        "training_config": {
+            "seed": SEED,
+            "learning_rate": LEARNING_RATE,
+            "min_learning_rate": MIN_LEARNING_RATE,
+            "weight_decay": WEIGHT_DECAY,
+            "label_smoothing": LABEL_SMOOTHING,
+            "grad_clip_norm": GRAD_CLIP_NORM,
+            "standard_aug_epochs": STANDARD_AUG_EPOCHS,
+            "image_size": IMAGE_SIZE,
+            "resize_size": RESIZE_SIZE,
+        },
+        "rng_state": {
+            "python": random.getstate(),
+            "torch": torch.get_rng_state(),
+            "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+        },
+    }
+    joblib.dump(checkpoint, checkpoint_path)
+    print(f"Saved training checkpoint to {checkpoint_path}")
+
+
 def set_train_augmentation(train_loader, epoch: int) -> str:
     if epoch <= STANDARD_AUG_EPOCHS:
         level = "standard"
@@ -163,6 +208,12 @@ def parse_args():
         type=Path,
         default=METRICS_OUTPUT,
         help="CSV file for per-epoch metrics.",
+    )
+    parser.add_argument(
+        "--checkpoint-output",
+        type=Path,
+        default=CHECKPOINT_OUTPUT,
+        help="Where to save a full checkpoint for continuing training.",
     )
     parser.add_argument(
         "--epochs",
@@ -219,6 +270,7 @@ def main():
     This script creates weights.joblib from a deterministic 80/20 split of
     train_set/train.
     """
+    start_time = time.perf_counter()
     args = parse_args()
     seed_everything(SEED)
 
@@ -237,6 +289,7 @@ def main():
     print(f"Image preprocessing: Resize({RESIZE_SIZE}) -> crop({IMAGE_SIZE})")
     print(f"Best weights output: {args.output}")
     print(f"Metrics output: {args.metrics_output}")
+    print(f"Training checkpoint output: {args.checkpoint_output}")
 
     model = build_model(args.model, num_classes=20).to(device)
     print(f"Parameter count: {sum(p.numel() for p in model.parameters()):,}")
@@ -392,6 +445,20 @@ def main():
     )
     print(f"Best checkpoint score: {best_score:.4f}")
     print(f"Held-out test: loss={test_loss:.4f} acc={test_accuracy:.4f}")
+    save_training_checkpoint(
+        args.checkpoint_output,
+        model,
+        optimizer,
+        scheduler,
+        scaler,
+        args,
+        args.epochs,
+        best_score,
+        args.output,
+    )
+    model.to(device)
+    elapsed_minutes = (time.perf_counter() - start_time) / 60
+    print(f"Total running time: {elapsed_minutes:.2f} minutes")
 
 
 if __name__ == "__main__":

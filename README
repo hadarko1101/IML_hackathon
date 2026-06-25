@@ -1,48 +1,102 @@
 Hadar Koren,Itamar Rappoport,Yair Peleg,Adi Kizel
 216372185,328243191,215981465,328097001
 
-here we will overview the work process we went through as
+Here we will overview the work process we went through as
 we designed the model and trained it.
 In order, we will explain our model, focusing on major design choices,
- then the data preprocessing pipeline. 
+then the data preprocessing pipeline.
 
 ---------------- |1| The model --------------------
 
-# 2.1 Major Design Choices
+# 1.1 Major Design Choices
 Residual Blocks: The network utilizes standard residual blocks with two 3x3 convolutions, Batch Normalization, and ReLU activations. A 1x1 shortcut connection is used whenever spatial dimensions or channel counts change.
 
-Global Average Pooling: The network uses Adaptive Average Pooling to reduce the spatial dimensions to 1x1 per channel before the final classifier. This reduces parameters and allows to handle arbitrary input resolutions.
+Global Average Pooling: The network uses Adaptive Average Pooling to reduce the spatial dimensions to 1x1 per channel before the final classifier. This reduces parameters and allows the model to handle different input resolutions.
 
-Custom Initialization: Uses Kaiming Normal initialization for convolutional layers, which is optimal for ReLU activations. helps to prevent vanishing/exploding gradients early in training.
+Custom Initialization: The model uses Kaiming Normal initialization for convolutional layers, which is suitable for ReLU activations and helps prevent vanishing/exploding gradients early in training.
 
 Gradient Clipping: Prevents exploding gradients by clipping the norm of the gradients during backpropagation.
 
-# 2.2 Model Variants
-three main variants are defined:
+# 1.2 Model Variants
+Three main variants are defined:
 
-BalancedResNet (Default): 4 stages, doubling channels (32, 64, 128, 256), with 2 blocks per stage.
+BalancedResNet: 4 stages, doubling channels (32, 64, 128, 256), with 2 blocks per stage.
 WideResNet: Increases channel capacity (48, 96, 192, 384) for learning more varied feature representations.
-DeepResNet: Increases depth to 3 blocks per stage to learn more complex, hierarchical features
+DeepResNet: Increases depth to 3 blocks per stage to learn more complex, hierarchical features.
+
+The current default submission architecture is WideResNet.
+
+# 1.3 Architectures and Runs We Tried
+
+WideResNet fast run:
+This was a faster WideResNet experiment using lower image resolution and fewer
+training steps per epoch. It reached about 0.77 accuracy on the test set. Since
+the lower resolution can remove useful image details, we later moved the wide
+model to the full evaluator-matching resolution.
+
+Stats:
+model: wide_resnet
+epochs: 25
+batch-size: 64
+steps-per-epoch: 125
+robust-eval-every: 3
+IMAGE_SIZE = 160 (instead of 224)
+RESIZE_SIZE = 190
+
+BalancedResNet run:
+This was our balanced-capacity model. It used the same residual structure, but
+with fewer channels than the wide model.
+
+Stats:
+BATCH_SIZE = 64
+EPOCHS = 25
+STEPS_PER_EPOCH = 200
+STANDARD_AUG_EPOCHS = 5
+LEARNING_RATE = 3e-4
+MIN_LEARNING_RATE = 3e-5
+IMAGE_SIZE = 224
+RESIZE_SIZE = 256
+
+Final WideResNet run:
+The current code is configured to use WideResNet as the default submission
+architecture. This keeps the higher-capacity model while matching the evaluator
+image preprocessing:
+
+Stats:
+IMAGE_SIZE = 224
+RESIZE_SIZE = 256
+BATCH_SIZE = 64
+EPOCHS = 25
+STEPS_PER_EPOCH = 200
+STANDARD_AUG_EPOCHS = 5
+LEARNING_RATE = 3e-4
+MIN_LEARNING_RATE = 3e-5
+
 
 ---------------- |2| data preprocessing and augmentations ----------------
 
 # Data Splits
-The dataset is split into train (80%), dev1 (10%), dev2 (5%), and test (5%).
+The dataset is split in a stratified way into train (88.5%), dev1 (10%),
+dev2 (0.5%), and held-out test (1%). In addition, the provided augmented images
+are loaded as a separate robustness evaluation set.
 
 # Augmentation Strategies
-The pipeline implements multiple augmentation tiers, standard, agressive, and extreme, each more
-altering then the previous. The idea was to try and see what the model can
-handle gradually.
-the following augmentations were implemented:
+The pipeline implements multiple augmentation tiers: standard, aggressive, and
+extreme, each more altering than the previous. In the current training script,
+the model starts with standard augmentation for the first 5 epochs and then
+switches to aggressive augmentation. The idea was to increase difficulty
+gradually and improve robustness.
+
+The following augmentations were implemented:
 
 - Resize, random cropping and horizontal flip.
-- Color jitter, mild contrast saturation and brightness changes.
-- Randomly removes square regions from the image.
+- Color jitter with brightness, contrast, saturation, and hue changes.
+- Random erasing, which removes square regions from the image.
 - GaussianNoise: Simulates sensor noise.
 - ChannelShuffle: Prevents the model from over-relying on specific color channels.
 - PatchShuffle: Disrupts spatial coherence, forcing the model to learn local textures.
 
 when we first ran our baseline model, which was a very simplified CNN, we got roughly
-40% accuracy, when training on 14000 sample with 10 ephocs and batchsize 128.
+40% accuracy, when training on 14000 samples with 10 epochs and batch size 128.
 we then proceeded to train on the same parameters but with all our augmentations.
 we saw an immediate reduction to 30%.
