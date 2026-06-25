@@ -92,6 +92,10 @@ def run_epoch(model, loader, criterion, optimizer, scaler, device, epoch: int, u
 
 @torch.no_grad()
 def evaluate(model, loader, criterion, device, epoch: int, split_name: str, use_amp: bool):
+    if len(loader.dataset) == 0:
+        print(f"  epoch {epoch:02d} {split_name:<5} skipped (empty split)")
+        return 0.0, 0.0
+
     model.eval()
     total_loss = 0.0
     correct = 0

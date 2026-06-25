@@ -2,7 +2,7 @@
 Data preprocessing module for IML Hackathon Challenge 2.
 
 Provides:
-  - Stratified 4-way split: train (80%), dev1 (10%), dev2 (5%), test (5%)
+  - Stratified 4-way split: train (89%), dev1 (10%), dev2 (0.5%), test (0.5%)
   - Multiple augmentation levels: standard, aggressive, extreme
   - Custom augmentation transforms (GaussianNoise, ChannelShuffle, PatchShuffle)
   - Batch-level augmentations (MixUp, CutMix)
@@ -61,10 +61,10 @@ SPLIT_SEED = 42
 
 # Split ratios — must sum to 1.0
 SPLIT_RATIOS = {
-    "train": 0.85,
+    "train": 0.89,
     "dev1":  0.10,
-    "dev2":  0.00,
-    "test":  0.05,
+    "dev2":  0.005,
+    "test":  0.005,
 }
 
 IMAGE_SIZE = 160
@@ -734,6 +734,9 @@ def get_data_loaders(
         counts = {}
         for _, label in samples:
             counts[label] = counts.get(label, 0) + 1
+        if not counts:
+            print(f"{name:>5}: {len(samples):>5} images  (empty split)")
+            continue
         print(
             f"{name:>5}: {len(samples):>5} images  "
             f"(per class: min={min(counts.values())}, max={max(counts.values())})"
