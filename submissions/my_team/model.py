@@ -174,7 +174,6 @@ class ModelArchitecture(BalancedResNet):
     Grader-facing default architecture.
 
     For the final submission, weights.joblib must come from this architecture.
-    The overnight experiment script saves non-default variants separately.
     """
 
     pass

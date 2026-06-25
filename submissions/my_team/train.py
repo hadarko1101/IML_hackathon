@@ -22,7 +22,6 @@ from data_processing import get_data_loaders, get_train_transform
 OUTPUT = TEAM_DIR / "weights.joblib"
 METRICS_OUTPUT = TEAM_DIR / "training_metrics.csv"
 
-# IMAGE_SIZE = 224
 BATCH_SIZE = 64
 EPOCHS = 25
 STEPS_PER_EPOCH = 200

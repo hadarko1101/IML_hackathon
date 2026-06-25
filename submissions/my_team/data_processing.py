@@ -61,14 +61,14 @@ SPLIT_SEED = 42
 
 # Split ratios — must sum to 1.0
 SPLIT_RATIOS = {
-    "train": 0.89,
+    "train": 0.885,
     "dev1":  0.10,
     "dev2":  0.005,
-    "test":  0.005,
+    "test":  0.01,
 }
 
-IMAGE_SIZE = 160
-RESIZE_SIZE = 192
+IMAGE_SIZE = 224
+RESIZE_SIZE = 256
 BATCH_SIZE = 64
 NUM_WORKERS = 2
 
