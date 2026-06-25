@@ -15,12 +15,12 @@ TEAM_DIR = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from model import MODEL_REGISTRY, build_model
-from data_processing import get_data_loaders, get_train_transform
+from model import DEFAULT_MODEL_NAME, MODEL_REGISTRY, build_model
+from data_processing import IMAGE_SIZE, RESIZE_SIZE, get_data_loaders, get_train_transform
 
 
 OUTPUT = TEAM_DIR / "weights.joblib"
-METRICS_OUTPUT = TEAM_DIR / "training_metrics.csv"
+METRICS_OUTPUT = TEAM_DIR / "training_metrics_wide_224.csv"
 
 BATCH_SIZE = 64
 EPOCHS = 25
@@ -42,6 +42,8 @@ ROBUST_EVAL_EVERY = 2
 def seed_everything(seed: int) -> None:
     random.seed(seed)
     torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.benchmark = True
 
 
 def run_epoch(model, loader, criterion, optimizer, scaler, device, epoch: int, use_amp: bool):
@@ -147,7 +149,7 @@ def parse_args():
     parser.add_argument(
         "--model",
         choices=sorted(MODEL_REGISTRY),
-        default="balanced_resnet",
+        default=DEFAULT_MODEL_NAME,
         help="Architecture variant to train.",
     )
     parser.add_argument(
@@ -232,6 +234,7 @@ def main():
     print(f"Training on {device}")
     print(f"Mixed precision: {'on' if use_amp else 'off'}")
     print(f"Training model: {args.model}")
+    print(f"Image preprocessing: Resize({RESIZE_SIZE}) -> crop({IMAGE_SIZE})")
     print(f"Best weights output: {args.output}")
     print(f"Metrics output: {args.metrics_output}")
 

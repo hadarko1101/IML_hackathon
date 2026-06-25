@@ -159,7 +159,7 @@ MODEL_REGISTRY = {
     "deep_resnet": DeepResNet,
 }
 
-DEFAULT_MODEL_NAME = "balanced_resnet"
+DEFAULT_MODEL_NAME = "wide_resnet"
 
 
 def build_model(model_name: str = DEFAULT_MODEL_NAME, num_classes: int = 20) -> nn.Module:
@@ -169,11 +169,12 @@ def build_model(model_name: str = DEFAULT_MODEL_NAME, num_classes: int = 20) -> 
     return MODEL_REGISTRY[model_name](num_classes=num_classes)
 
 
-class ModelArchitecture(BalancedResNet):
+class ModelArchitecture(WideResNet):
     """
     Grader-facing default architecture.
 
     For the final submission, weights.joblib must come from this architecture.
+    Keep this in sync with the default training model.
     """
 
     pass
