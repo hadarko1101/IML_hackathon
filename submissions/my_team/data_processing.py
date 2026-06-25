@@ -2,7 +2,7 @@
 Data preprocessing module for IML Hackathon Challenge 2.
 
 Provides:
-  - Stratified 4-way split: train (70%), dev1 (10%), dev2 (10%), test (10%)
+  - Stratified 4-way split: train (80%), dev1 (10%), dev2 (5%), test (5%)
   - Multiple augmentation levels: standard, aggressive, extreme
   - Custom augmentation transforms (GaussianNoise, ChannelShuffle, PatchShuffle)
   - Batch-level augmentations (MixUp, CutMix)
@@ -61,10 +61,10 @@ SPLIT_SEED = 42
 
 # Split ratios — must sum to 1.0
 SPLIT_RATIOS = {
-    "train": 0.70,
+    "train": 0.80,
     "dev1":  0.10,
-    "dev2":  0.10,
-    "test":  0.10,
+    "dev2":  0.05,
+    "test":  0.05,
 }
 
 IMAGE_SIZE = 224
@@ -749,6 +749,13 @@ def get_data_loaders(
     aug_dataset   = AugmentationDataset(AUG_DIR, class_to_idx, transform=get_val_transform())
 
     # ── Create DataLoaders ────────────────────────────────────────────────
+    worker_kwargs = {}
+    if num_workers > 0:
+        worker_kwargs = {
+            "persistent_workers": True,
+            "prefetch_factor": 2,
+        }
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
@@ -756,6 +763,7 @@ def get_data_loaders(
         num_workers=num_workers,
         pin_memory=True,
         drop_last=True,
+        **worker_kwargs,
     )
 
     loader_kwargs = dict(
@@ -763,6 +771,7 @@ def get_data_loaders(
         shuffle=False,
         num_workers=num_workers,
         pin_memory=True,
+        **worker_kwargs,
     )
     dev1_loader = DataLoader(dev1_dataset, **loader_kwargs)
     dev2_loader = DataLoader(dev2_dataset, **loader_kwargs)

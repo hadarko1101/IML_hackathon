@@ -11,21 +11,27 @@ LOG_DIR = TEAM_DIR / "overnight_logs"
 RUNS = [
     {
         "name": "balanced_resnet",
-        "epochs": 30,
-        "batch_size": 32,
+        "epochs": 25,
+        "batch_size": 64,
         "steps_per_epoch": 200,
+        "num_workers": 2,
+        "robust_eval_every": 2,
     },
     {
         "name": "wide_resnet",
-        "epochs": 30,
-        "batch_size": 32,
+        "epochs": 25,
+        "batch_size": 64,
         "steps_per_epoch": 200,
+        "num_workers": 2,
+        "robust_eval_every": 2,
     },
     {
         "name": "deep_resnet",
-        "epochs": 30,
-        "batch_size": 32,
+        "epochs": 25,
+        "batch_size": 64,
         "steps_per_epoch": 200,
+        "num_workers": 2,
+        "robust_eval_every": 2,
     },
 ]
 
@@ -46,7 +52,9 @@ def build_command(run: dict) -> list[str]:
         "--metrics-output",
         str(LOG_DIR / f"metrics_{model_name}.csv"),
         "--num-workers",
-        "0",
+        str(run["num_workers"]),
+        "--robust-eval-every",
+        str(run["robust_eval_every"]),
     ]
 
     if run["steps_per_epoch"] is not None:

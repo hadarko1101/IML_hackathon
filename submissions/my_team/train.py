@@ -23,12 +23,13 @@ OUTPUT = TEAM_DIR / "weights.joblib"
 METRICS_OUTPUT = TEAM_DIR / "training_metrics.csv"
 
 IMAGE_SIZE = 224
-BATCH_SIZE = 32
-EPOCHS = 20
-STEPS_PER_EPOCH = None
-STANDARD_AUG_EPOCHS = 3
+BATCH_SIZE = 64
+EPOCHS = 25
+STEPS_PER_EPOCH = 200
+STANDARD_AUG_EPOCHS = 5
 SEED = 42
 LEARNING_RATE = 3e-4
+MIN_LEARNING_RATE = 3e-5
 WEIGHT_DECAY = 1e-4
 LOG_EVERY_BATCHES = 10
 LABEL_SMOOTHING = 0.05
@@ -36,6 +37,7 @@ GRAD_CLIP_NORM = 1.0
 DEV1_SCORE_WEIGHT = 0.55
 DEV2_SCORE_WEIGHT = 0.25
 AUG_SCORE_WEIGHT = 0.20
+ROBUST_EVAL_EVERY = 2
 
 
 def seed_everything(seed: int) -> None:
@@ -43,7 +45,7 @@ def seed_everything(seed: int) -> None:
     torch.manual_seed(seed)
 
 
-def run_epoch(model, loader, criterion, optimizer, device, epoch: int):
+def run_epoch(model, loader, criterion, optimizer, scaler, device, epoch: int, use_amp: bool):
     model.train()
     total_loss = 0.0
     correct = 0
@@ -58,15 +60,18 @@ def run_epoch(model, loader, criterion, optimizer, device, epoch: int):
             data_iter = iter(loader)
             images, labels = next(data_iter)
 
-        images = images.to(device)
-        labels = labels.to(device)
+        images = images.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
 
-        optimizer.zero_grad()
-        logits = model(images)
-        loss = criterion(logits, labels)
-        loss.backward()
+        optimizer.zero_grad(set_to_none=True)
+        with torch.cuda.amp.autocast(enabled=use_amp):
+            logits = model(images)
+            loss = criterion(logits, labels)
+        scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
         nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP_NORM)
-        optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
 
         batch_size = labels.size(0)
         total_loss += loss.item() * batch_size
@@ -86,18 +91,19 @@ def run_epoch(model, loader, criterion, optimizer, device, epoch: int):
 
 
 @torch.no_grad()
-def evaluate(model, loader, criterion, device, epoch: int, split_name: str):
+def evaluate(model, loader, criterion, device, epoch: int, split_name: str, use_amp: bool):
     model.eval()
     total_loss = 0.0
     correct = 0
     total = 0
 
     for batch_idx, (images, labels) in enumerate(loader, start=1):
-        images = images.to(device)
-        labels = labels.to(device)
+        images = images.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
 
-        logits = model(images)
-        loss = criterion(logits, labels)
+        with torch.cuda.amp.autocast(enabled=use_amp):
+            logits = model(images)
+            loss = criterion(logits, labels)
 
         batch_size = labels.size(0)
         total_loss += loss.item() * batch_size
@@ -174,8 +180,19 @@ def parse_args():
     parser.add_argument(
         "--num-workers",
         type=int,
-        default=0,
+        default=2,
         help="DataLoader workers. Use 0 on Windows if multiprocessing is unstable.",
+    )
+    parser.add_argument(
+        "--robust-eval-every",
+        type=int,
+        default=ROBUST_EVAL_EVERY,
+        help="Evaluate dev2/aug every N epochs. dev1 is evaluated every epoch.",
+    )
+    parser.add_argument(
+        "--no-amp",
+        action="store_true",
+        help="Disable CUDA mixed precision.",
     )
     return parser.parse_args()
 
@@ -208,7 +225,9 @@ def main():
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    use_amp = device.type == "cuda" and not args.no_amp
     print(f"Training on {device}")
+    print(f"Mixed precision: {'on' if use_amp else 'off'}")
     print(f"Training model: {args.model}")
     print(f"Best weights output: {args.output}")
     print(f"Metrics output: {args.metrics_output}")
@@ -221,9 +240,11 @@ def main():
         lr=LEARNING_RATE,
         weight_decay=WEIGHT_DECAY,
     )
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer,
         T_max=args.epochs,
+        eta_min=MIN_LEARNING_RATE,
     )
 
     best_score = -1.0
@@ -237,9 +258,14 @@ def main():
         print(f"Training uses full epochs: {len(train_loader)} batches per epoch.")
     else:
         print(f"Training uses {args.steps_per_epoch} batches per epoch.")
+    print(f"dev2/aug evaluation cadence: every {args.robust_eval_every} epoch(s).")
 
     global STEPS_PER_EPOCH
     STEPS_PER_EPOCH = args.steps_per_epoch
+    dev2_loss = None
+    dev2_accuracy = None
+    aug_loss = None
+    aug_accuracy = None
 
     for epoch in range(1, args.epochs + 1):
         augmentation_level = set_train_augmentation(train_loader, epoch)
@@ -253,8 +279,10 @@ def main():
             train_loader,
             criterion,
             optimizer,
+            scaler,
             device,
             epoch,
+            use_amp,
         )
         dev1_loss, dev1_accuracy = evaluate(
             model,
@@ -263,23 +291,43 @@ def main():
             device,
             epoch,
             "dev1",
+            use_amp,
         )
-        dev2_loss, dev2_accuracy = evaluate(
-            model,
-            dev2_loader,
-            criterion,
-            device,
-            epoch,
-            "dev2",
+        run_robust_eval = (
+            epoch == 1
+            or epoch == args.epochs
+            or epoch % args.robust_eval_every == 0
         )
-        aug_loss, aug_accuracy = evaluate(
-            model,
-            aug_loader,
-            criterion,
-            device,
-            epoch,
-            "aug",
-        )
+        if run_robust_eval:
+            dev2_loss, dev2_accuracy = evaluate(
+                model,
+                dev2_loader,
+                criterion,
+                device,
+                epoch,
+                "dev2",
+                use_amp,
+            )
+            aug_loss, aug_accuracy = evaluate(
+                model,
+                aug_loader,
+                criterion,
+                device,
+                epoch,
+                "aug",
+                use_amp,
+            )
+        else:
+            print(
+                f"  epoch {epoch:02d} dev2/aug skipped "
+                f"(using previous values for checkpoint score)",
+                flush=True,
+            )
+
+        assert dev2_loss is not None
+        assert dev2_accuracy is not None
+        assert aug_loss is not None
+        assert aug_accuracy is not None
         checkpoint_score = (
             DEV1_SCORE_WEIGHT * dev1_accuracy
             + DEV2_SCORE_WEIGHT * dev2_accuracy
@@ -334,6 +382,7 @@ def main():
         device,
         args.epochs,
         "test",
+        use_amp,
     )
     print(f"Best checkpoint score: {best_score:.4f}")
     print(f"Held-out test: loss={test_loss:.4f} acc={test_accuracy:.4f}")
